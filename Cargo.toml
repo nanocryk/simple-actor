@@ -1,6 +1,6 @@
 [package]
 name = "simple-actor"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 authors = ["nanocryk"]
@@ -11,6 +11,7 @@ using an invoke function.
 keywords = ["asynchronous", "actor"]
 repository = "https://github.com/nanocryk/simple-actor"
 license = "MIT"
+documentation = "https://docs.rs/simple-actor"
 
 [dependencies]
 futures = { version = "0.3.21" }
