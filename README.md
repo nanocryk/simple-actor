@@ -49,3 +49,11 @@ async fn main() {
     assert_eq!(adder.result().await, None);
 }
 ```
+
+## Inspiration
+
+This crate is inspired by [`ghost_actor`], with a simpler implementation and
+API. This crate `invoke` function returns `None` if the actor is down, which
+avoids dealing with error type conversions.
+ 
+[`ghost_actor`]: https://github.com/holochain/ghost_actor
