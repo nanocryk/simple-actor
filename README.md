@@ -81,13 +81,13 @@ async fn main() {
 
 ## Inspiration
 
-This crate is inspired by [`ghost_actor`], with a simpler implementation and
+This crate is inspired by `ghost_actor`, with a simpler implementation and
 API.
 
-This crate [`invoke`] function returns `None` if the actor is down, which avoids
+This crate `invoke` function returns `None` if the actor is down, which avoids
 dealing with error type conversions.
 
-It also allows to hold the state in [`invoke_async`] and thus use async-based
+It also allows to hold the state in `invoke_async` and thus use async-based
 state.
 
 [`ghost_actor`]: https://github.com/holochain/ghost_actor
