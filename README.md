@@ -1,13 +1,17 @@
 # simple-actor
 
-Provides an `Actor` type that wraps a state and allows mutating it
-in turns using `invoke` and `invoke_async`.
+[![License](https://img.shields.io/crates/l/simple-actor)](./LICENSE)
+[![Version](https://img.shields.io/crates/v/simple-actor)](https://crates.io/crates/simple-actor)
+[![Documentation](https://img.shields.io/docsrs/simple-actor)](https://docs.rs/simple-actor/)
+
+Provides an `Actor` type that wraps a state and allows mutating it in turns
+using `invoke` and `invoke_async`.
 
 # Example
 
-It is recommended to create a wrapper type around the `Actor`, and
-implement async functions that use `invoke`/`invoke_async` to interact
-with the inner private state.
+It is recommended to create a wrapper type around the `Actor`, and implement
+async functions that use `invoke`/`invoke_async` to interact with the inner
+private state.
 
 ```rust
 use std::time::Duration;
@@ -80,10 +84,10 @@ async fn main() {
 This crate is inspired by [`ghost_actor`], with a simpler implementation and
 API.
 
-This crate [`invoke`] function returns `None` if the actor is down, which
-avoids dealing with error type conversions.
+This crate [`invoke`] function returns `None` if the actor is down, which avoids
+dealing with error type conversions.
 
-It also allows to hold the state in [`invoke_async`] and thus use
-async-based state.
+It also allows to hold the state in [`invoke_async`] and thus use async-based
+state.
 
 [`ghost_actor`]: https://github.com/holochain/ghost_actor
