@@ -49,9 +49,9 @@
 //!     assert_eq!(adder.result().await, None);
 //! }
 //! ```
-//! 
+//!
 //! ## Inspiration
-//! 
+//!
 //! This crate is inspired by [`ghost_actor`], with a simpler implementation and
 //! API. This crate `invoke` function returns `None` if the actor is down, which
 //! avoids dealing with error type conversions.
@@ -62,12 +62,14 @@ use futures::{
     channel::{mpsc, oneshot},
     Future, FutureExt, SinkExt, StreamExt,
 };
+use std::hash::Hash;
 
 type InnerInvoke<T> = Box<dyn FnOnce(&mut T) + 'static + Send>;
 type SendInvoke<T> = mpsc::Sender<InnerInvoke<T>>;
 
 /// Actor wrapping a state.
-#[derive(Clone)]
+///
+/// Cloning the actor provides an handle to the same actor.
 pub struct Actor<T: 'static + Send>(SendInvoke<T>);
 impl<T: 'static + Send> Actor<T> {
     /// Creates a new `Actor` with default inbound channel capacity (1024).
@@ -141,5 +143,25 @@ impl<T: 'static + Send> Actor<T> {
     /// before really stopping.
     pub fn shutdown(&self) {
         self.0.clone().close_channel()
+    }
+}
+
+impl<T: 'static + Send> Clone for Actor<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<T: 'static + Send> PartialEq for Actor<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.same_receiver(&other.0)
+    }
+}
+
+impl<T: 'static + Send> Eq for Actor<T> {}
+
+impl<T: 'static + Send> Hash for Actor<T> {
+    fn hash<Hasher: std::hash::Hasher>(&self, hasher: &mut Hasher) {
+        self.0.hash_receiver(hasher);
     }
 }
