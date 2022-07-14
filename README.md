@@ -1,14 +1,12 @@
 # simple-actor
 
-Provides an [`Actor`] type that wraps a state and allows mutating it
-in turns using [`invoke`].
-
-[`invoke`]: Actor::invoke
+Provides an `Actor` type that wraps a state and allows mutating it
+in turns using `invoke`.
 
 ## Example
 
-It is recommended to create a wrapper type around the [`Actor`],
-and implement async functions that use [`invoke`] to interact with
+It is recommended to create a wrapper type around the `Actor`,
+and implement async functions that use `invoke` to interact with
 the inner private state.
 
 ```rust
