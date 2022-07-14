@@ -1,0 +1,19 @@
+[package]
+name = "simple-actor"
+version = "0.1.0"
+edition = "2021"
+
+authors = ["nanocryk"]
+description = """
+Provides an Actor type that wraps a state and allows mutating it in turns
+using an invoke function.
+"""
+keywords = ["asynchronous", "actor"]
+repository = "https://github.com/nanocryk/simple-actor"
+license = "MIT"
+
+[dependencies]
+futures = { version = "0.3.21" }
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full"] }
