@@ -1,19 +1,9 @@
-//! Provides an [`Actor`] type that wraps a state and allows mutating it
-//! in turns using [`invoke`] and [`invoke_async`].
-//!
-//! [`invoke`]: Actor::invoke
-//! [`invoke_async`]: Actor::invoke_async
-//!
-//! # Example
-//!
-//! It is recommended to create a wrapper type around the [`Actor`], and
-//! implement async functions that use [`invoke`]/[`invoke_async`] to interact
-//! with the inner private state.
+//! Helper to write actor-based async code.
 //!
 //! ```rust
-//! use std::time::Duration;
-//! use simple_actor::Actor;
 //! use futures::FutureExt;
+//! use simple_actor::Actor;
+//! use std::time::Duration;
 //!
 //! #[derive(Clone)]
 //! pub struct Adder(Actor<u32>);
@@ -25,36 +15,26 @@
 //!         Self(actor)
 //!     }
 //!
-//!     pub async fn add(&self, x: u32) {
-//!         let _ = self.0.invoke(move |state| {
-//!             // We can update the state.
+//!     pub async fn add(&self, x: u32) -> bool {
+//!         self.0.queue(move |state| *state += x).await
+//!     }
+//!
+//!     pub async fn add_delayed(&self, x: u32) -> bool {
+//!         self.0.queue_blocking(move |state| async move {
+//!             tokio::time::sleep(Duration::from_millis(500)).await;
 //!             *state += x
-//!         }).await;
+//!         }.boxed()).await
 //!     }
 //!
-//!     pub async fn add_twice_with_delay(&self, x: u32) -> Option<u32> {
-//!         self.0
-//!             .invoke_async(move |state| {
-//!                 async move {
-//!                     *state += x;
-//!                     // We can .await while holding the state.
-//!                     tokio::time::sleep(Duration::from_millis(500)).await;
-//! 
-//!                     *state += x;
-//!                     // We can return a value at the end.
-//!                     *state
-//!                 }
-//!                 .boxed()
-//!             })
-//!             .await
+//!     pub async fn get(&self) -> Option<u32> {
+//!         self.0.query(move |state| *state).await
 //!     }
 //!
-//!     pub async fn result(&self) -> Option<u32> {
-//!         self.0.invoke(move |state| *state).await
-//!     }
-//!
-//!     pub fn shutdown(&self) {
-//!         self.0.shutdown()
+//!     pub async fn get_delayed(&self) -> Option<u32> {
+//!         self.0.query_blocking(move |state| async move {
+//!             tokio::time::sleep(Duration::from_millis(500)).await;
+//!             *state
+//!         }.boxed()).await
 //!     }
 //! }
 //!
@@ -62,17 +42,21 @@
 //! async fn main() {
 //!     let adder = Adder::new(5);
 //!
-//!     adder.add(3).await;
-//!     assert_eq!(adder.result().await, Some(8));
+//!     assert_eq!(adder.add(2).await, true);
+//!     assert_eq!(adder.get().await, Some(7));
 //!
-//!     adder.add(2).await;
-//!     assert_eq!(adder.result().await, Some(10));
+//!     assert_eq!(adder.add_delayed(3).await, true);
+//!     assert_eq!(adder.get_delayed().await, Some(10));
 //!
-//!     assert_eq!(adder.add_twice_with_delay(3).await, Some(16));
-//!     assert_eq!(adder.result().await, Some(16));
+//!     assert!(adder.0.is_active());
+//!     adder.0.shutdown();
+//!     assert!(!adder.0.is_active());
 //!
-//!     adder.shutdown();
-//!     assert_eq!(adder.result().await, None);
+//!     assert_eq!(adder.add(2).await, false);
+//!     assert_eq!(adder.get().await, None);
+//!
+//!     assert_eq!(adder.add_delayed(2).await, false);
+//!     assert_eq!(adder.get_delayed().await, None);
 //! }
 //! ```
 //!
@@ -81,11 +65,11 @@
 //! This crate is inspired by [`ghost_actor`], with a simpler implementation and
 //! API.
 //!
-//! This crate [`invoke`] function returns `None` if the actor is down, which
+//! This crate functions returns `None` or `false` if the actor is down, which
 //! avoids dealing with error type conversions.
 //!
-//! It also allows to hold the state in [`invoke_async`] and thus use
-//! async-based state.
+//! This crate also allows to use futures that can hold the state across
+//! `.await`.
 //!  
 //! [`ghost_actor`]: https://github.com/holochain/ghost_actor
 
@@ -96,13 +80,20 @@ use futures::{
 use std::{hash::Hash, pin::Pin};
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a + Send>>;
-type InnerInvoke<T> = Box<dyn for<'a> FnOnce(&'a mut T) -> BoxFuture<'a, ()> + Send>;
-type SendInvoke<T> = mpsc::Sender<InnerInvoke<T>>;
+type Blocking<T> = Box<dyn for<'a> FnOnce(&'a mut T) -> BoxFuture<'a, ()> + Send>;
+type NonBlocking<T> = Box<dyn FnOnce(&mut T) + 'static + Send>;
+
+enum StateChange<T> {
+    Async(Blocking<T>),
+    Sync(NonBlocking<T>),
+}
+
+type StateChangeSender<T> = mpsc::Sender<StateChange<T>>;
 
 /// Actor wrapping a state.
 ///
 /// Cloning the actor provides an handle to the same actor.
-pub struct Actor<T: 'static + Send>(SendInvoke<T>);
+pub struct Actor<T: 'static + Send>(StateChangeSender<T>);
 impl<T: 'static + Send> Actor<T> {
     /// Creates a new `Actor` with default inbound channel capacity (1024).
     ///
@@ -117,58 +108,140 @@ impl<T: 'static + Send> Actor<T> {
     /// Returned future must be spawned in an async executor.
     #[must_use]
     pub fn new_with_capacity(mut state: T, capacity: usize) -> (Self, impl Future<Output = ()>) {
-        let (invoke_tx, mut invoke_rx) = mpsc::channel::<InnerInvoke<T>>(capacity);
+        let (send, recv) = mpsc::channel::<StateChange<T>>(capacity);
 
         let driver = FutureExt::boxed(async move {
-            while let Some(invoke) = invoke_rx.next().await {
-                invoke(&mut state).await;
+            let mut recv = StreamExt::ready_chunks(recv, 1024);
+
+            while let Some(changes) = recv.next().await {
+                for change in changes {
+                    match change {
+                        StateChange::Async(f) => f(&mut state).await,
+                        StateChange::Sync(f) => f(&mut state),
+                    }
+                }
             }
         });
 
-        (Self(invoke_tx), driver)
+        (Self(send), driver)
     }
 
-    /// Interacts with the state using a closure returning a future.
-    /// This future holds the mutable reference to the state, and prevents the
-    /// actor to process further invokes until this future ends.
+    /// Queue an async function on the state. The future that this function
+    /// returns can hold the state across await points, meaning it will prevent
+    /// other functions to be processed until the future is complete.
     ///
-    /// The future needs to be boxed using [`futures::FutureExt::boxed`].
+    /// [`queue_blocking`] resolves once the order is sent to the actor, and
+    /// doesn't wait for it to be processed by the actor, but cannot have
+    /// an output value.
     ///
-    /// Returns `None` if the actor is no longer running.
-    pub fn invoke_async<F, R>(&self, invoke: F) -> impl Future<Output = Option<R>>
+    /// To wait for the order to be processed and get an output, use
+    /// [`query_blocking`].
+    ///
+    /// [`queue_blocking`]: Actor::queue_blocking
+    /// [`query_blocking`]: Actor::query_blocking
+    pub async fn queue_blocking<F>(&self, f: F) -> bool
+    where
+        F: for<'a> FnOnce(&'a mut T) -> BoxFuture<'a, ()> + Send + 'static,
+    {
+        let mut send = self.0.clone();
+
+        let f: Blocking<T> = Box::new(move |state: &mut T| {
+            async move {
+                f(state).await;
+            }
+            .boxed()
+        });
+
+        send.send(StateChange::Async(f)).await.is_ok()
+    }
+
+    /// Queue a function on the state. It is more performant to have multiple
+    /// [`queue`]/[`query`] in a row, as it can avoid using `.await` on the internal channel
+    /// or on a future-based change ([`queue_blocking`]/[`query_blocking`]).
+    ///
+    /// [`queue`] resolves once the order is sent to the actor, and doesn't wait
+    /// for it to be processed by the actor, but cannot have an output value.
+    ///
+    /// To wait for the order to be processed and get an output, use [`query`].
+    ///
+    /// [`queue`]: Actor::queue
+    /// [`query`]: Actor::query
+    /// [`queue_blocking`]: Actor::queue_blocking
+    /// [`query_blocking`]: Actor::query_blocking
+    pub async fn queue<F>(&self, f: F) -> bool
+    where
+        F: FnOnce(&mut T) + 'static + Send,
+    {
+        let mut send = self.0.clone();
+
+        send.send(StateChange::Sync(Box::new(f))).await.is_ok()
+    }
+
+    /// Queue an async function on the state. The future that this function
+    /// returns can hold the state across await points, meaning it will prevent
+    /// other functions to be processed until the future is complete.
+    ///
+    /// [`query_blocking`] resolves once the order as been processed by the actor,
+    /// which allows it to return an output.
+    ///
+    /// If an output is not needed and it is not needed to wait for the order
+    /// to be processed, use [`queue_blocking`].
+    ///
+    /// [`query_blocking`]: Actor::query_blocking
+    /// [`queue_blocking`]: Actor::queue_blocking
+    pub async fn query_blocking<F, R>(&self, f: F) -> Option<R>
     where
         F: for<'a> FnOnce(&'a mut T) -> BoxFuture<'a, R> + Send + 'static,
         R: 'static + Send,
     {
-        let mut invoke_tx = self.0.clone();
+        let mut send = self.0.clone();
+        let (output_send, output_recv) = oneshot::channel();
 
-        async move {
-            let (response_tx, response_rx) = oneshot::channel();
+        let f: Blocking<T> = Box::new(move |state: &mut T| {
+            async move {
+                let output = f(state).await;
+                let _ = output_send.send(output);
+            }
+            .boxed()
+        });
 
-            let real_invoke: InnerInvoke<T> = Box::new(move |state: &mut T| {
-                async move {
-                    let res = invoke(state).await;
-                    let _ = response_tx.send(res);
-                }
-                .boxed()
-            });
+        send.send(StateChange::Async(f)).await.ok()?;
 
-            invoke_tx.send(real_invoke).await.ok()?;
-
-            response_rx.await.ok()
-        }
+        output_recv.await.ok()
     }
 
-    /// Interact with the state using a closure.
+    /// Queue a function on the state. It is more performant to have multiple
+    /// [`queue`]/[`query`] in a row, as it can avoid using `.await` on the internal channel
+    /// or on a future-based change ([`queue_blocking`]/[`query_blocking`]).
     ///
-    /// Returns `None` if the actor is no longer running.
-    pub async fn invoke<F, R>(&self, invoke: F) -> Option<R>
+    /// [`query_blocking`] resolves once the order as been processed by the actor,
+    /// which allows it to return an output.
+    ///
+    /// If an output is not needed and it is not needed to wait for the order
+    /// to be processed, use [`queue_blocking`].
+    ///
+    ///
+    /// [`queue`]: Actor::queue
+    /// [`query`]: Actor::query
+    /// [`queue_blocking`]: Actor::queue_blocking
+    /// [`query_blocking`]: Actor::query_blocking
+    pub async fn query<F, R>(&self, f: F) -> Option<R>
     where
         F: FnOnce(&mut T) -> R + 'static + Send,
         R: 'static + Send,
     {
-        self.invoke_async(|state| async move { invoke(state) }.boxed())
+        let mut invoke_tx = self.0.clone();
+        let (response_tx, response_rx) = oneshot::channel();
+
+        invoke_tx
+            .send(StateChange::Sync(Box::new(move |state| {
+                let output = f(state);
+                let _ = response_tx.send(output);
+            })))
             .await
+            .ok()?;
+
+        response_rx.await.ok()
     }
 
     /// Tells if the actor still accepts new invokes.
