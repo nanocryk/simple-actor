@@ -12,11 +12,11 @@ impl Adder {
         Self(actor)
     }
 
-    pub async fn add(&self, x: u32) -> bool {
+    pub async fn add(&self, x: u32) -> Option<()> {
         self.0.queue(move |state| *state += x).await
     }
 
-    pub async fn add_delayed(&self, x: u32) -> bool {
+    pub async fn add_delayed(&self, x: u32) -> Option<()> {
         self.0
             .queue_blocking(move |state| {
                 async move {
@@ -49,19 +49,19 @@ impl Adder {
 async fn main() {
     let adder = Adder::new(5);
 
-    assert_eq!(adder.add(2).await, true);
+    assert_eq!(adder.add(2).await, Some(()));
     assert_eq!(adder.get().await, Some(7));
 
-    assert_eq!(adder.add_delayed(3).await, true);
+    assert_eq!(adder.add_delayed(3).await, Some(()));
     assert_eq!(adder.get_delayed().await, Some(10));
 
     assert!(adder.0.is_active());
     adder.0.shutdown();
     assert!(!adder.0.is_active());
 
-    assert_eq!(adder.add(2).await, false);
+    assert_eq!(adder.add(2).await, None);
     assert_eq!(adder.get().await, None);
 
-    assert_eq!(adder.add_delayed(2).await, false);
+    assert_eq!(adder.add_delayed(2).await, None);
     assert_eq!(adder.get_delayed().await, None);
 }
