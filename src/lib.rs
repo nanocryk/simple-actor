@@ -216,7 +216,7 @@ impl<T: 'static + Send> Actor<T> {
     /// which allows it to return an output.
     ///
     /// If an output is not needed and it is not needed to wait for the order
-    /// to be processed, use [`queue_blocking`].
+    /// to be processed, use [`queue`].
     ///
     ///
     /// [`queue`]: Actor::queue
